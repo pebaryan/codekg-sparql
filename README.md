@@ -6,6 +6,88 @@ Turn any codebase into a queryable RDF knowledge graph using **Tree-sitter** for
 
 Built for **local AI coding agents** (7B–13B models via llama.cpp) to reason structurally about code: callers, callees, impact analysis, inheritance chains, cross-file references — without grep hell or huge context dumps.
 
+## Example: AI Agent Fixing a Bug via MCP
+
+A user reports: *"`validate_config` is returning `True` for invalid configs."* Here's how an AI agent connected via MCP works through this using CodeKG tools:
+
+**1. Find the function**
+```
+→ resolve_entity("validate_config")
+← [{"name": "validate_config", "file": "config.py", "startLine": 18, "endLine": 24}]
+```
+No ambiguity — one match, exact location. No grepping through the repo.
+
+**2. Read the source**
+```
+→ read_source("config.py", 18, 24)
+```
+```python
+def validate_config(config: dict) -> bool:
+    required = ["host", "port", "debug"]
+    for key in required:
+        if key not in config:
+            return False
+    return True
+```
+
+**3. Understand the context — who calls this, and with what?**
+```
+→ context_around("validate_config")
+← callers: [create_app in app.py]    callees: []    container: config.py
+```
+```
+→ read_source("app.py", 7, 12)
+```
+```python
+def create_app(config_path: str):
+    config = parse_config(config_path)
+    if not validate_config(config):
+        raise ValueError("Invalid config")
+    return {"config": config}
+```
+
+Now the agent sees the full picture: `parse_config` returns `{"raw": raw_text}` — it never sets `host`, `port`, or `debug`. The bug is in `parse_config`, not `validate_config`.
+
+**4. Check the blast radius before fixing**
+```
+→ impact_of("parse_config")
+← transitive callers: create_app → main
+```
+Only two functions are affected. Safe to fix.
+
+**5. Apply the fix**
+```
+→ replace_entity("parse_config", "def parse_config(path: str) -> dict:\n    import yaml\n    from pathlib import Path\n    return yaml.safe_load(Path(path).read_text()) or {}\n", "./my-project")
+← Replaced 'parse_config': 5 lines removed, 4 added.
+```
+The file is modified, the KG is re-indexed, and an undo snapshot is saved automatically.
+
+**6. Verify nothing else broke**
+```
+→ dead_code()              # did we orphan anything?
+→ callers_of("parse_config")  # still called correctly?
+```
+Both confirm the change is clean.
+
+**7. If the fix was wrong**
+```
+→ undo_last("./my-project")
+← Undid: replace lines 10-15 in config.py (restored: config.py)
+```
+Files restored to pre-edit state instantly.
+
+### Why this beats grep + reading files
+
+| Without CodeKG | With CodeKG |
+|---|---|
+| `grep -r "validate_config"` across the whole repo, manually filtering noise | One `resolve_entity` call — exact file and line |
+| Manually trace callers by reading imports and searching | `context_around` gives callers, callees, and container in one call |
+| No idea what else breaks if you change something | `impact_of` gives the full transitive blast radius |
+| Fix a function, hope nothing else depended on the old behavior | `dead_code` and `callers_of` confirm the change is safe |
+| Mess up a refactor, manually undo with git | `undo_last` restores files instantly |
+
+The key value is **structural reasoning** — the agent doesn't just find text, it understands call chains, impact, and containment. A 7B model can follow this workflow because each MCP tool returns focused, structured data instead of dumping entire files into context.
+
 ## Why RDF/SPARQL?
 
 - **Transitive queries** — SPARQL property paths (`code:resolvedCalls+`) give you full transitive call chains in one query
