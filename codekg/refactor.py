@@ -12,6 +12,7 @@ from tree_sitter import Language, Parser
 
 from .store import CodeStore
 from .indexer import index_file
+from .undo import get_undo_stack
 
 # Node types that represent identifiers across supported languages.
 _IDENT_TYPES = frozenset({
@@ -155,6 +156,66 @@ def _find_entity(store: CodeStore, entity_name: str) -> dict | None:
 # Public operations
 # ---------------------------------------------------------------------------
 
+def _compute_rename(store, root_path, old_name, new_name):
+    """Shared logic: compute rename changes without writing.
+
+    Returns list of ``(rel_path, abs_path, old_source, new_source, count)``
+    for each file with changes.
+    """
+    root = Path(root_path).resolve()
+    rel_files = _affected_files(store, old_name)
+    changes = []
+    for rel in rel_files:
+        abs_path = str(root / rel)
+        if not os.path.isfile(abs_path):
+            continue
+        parser = _ts_parser(abs_path)
+        if parser is None:
+            continue
+        source = Path(abs_path).read_bytes()
+        tree = parser.parse(source)
+        positions = _find_identifiers(tree.root_node, old_name)
+        if not positions:
+            continue
+        new_source = _replace_bytes(source, positions, new_name)
+        changes.append((rel, abs_path, source, new_source, len(positions)))
+    return changes
+
+
+def preview_rename(
+    store: CodeStore,
+    root_path: str,
+    old_name: str,
+    new_name: str,
+) -> dict:
+    """Preview a rename without modifying any files.
+
+    Returns dict with ``files``, ``total_occurrences``, and a unified
+    ``diff`` string showing all changes.
+    """
+    import difflib
+    changes = _compute_rename(store, root_path, old_name, new_name)
+    if not changes:
+        return {"files": [], "total_occurrences": 0, "diff": ""}
+
+    diff_parts = []
+    total = 0
+    files = []
+    for rel, abs_path, old_source, new_source, count in changes:
+        files.append(rel)
+        total += count
+        old_lines = old_source.decode("utf-8").splitlines(keepends=True)
+        new_lines = new_source.decode("utf-8").splitlines(keepends=True)
+        diff = difflib.unified_diff(old_lines, new_lines, fromfile=rel, tofile=rel)
+        diff_parts.append("".join(diff))
+
+    return {
+        "files": files,
+        "total_occurrences": total,
+        "diff": "\n".join(diff_parts),
+    }
+
+
 def rename_symbol(
     store: CodeStore,
     root_path: str,
@@ -169,34 +230,23 @@ def rename_symbol(
 
     Returns dict with ``files_modified`` and ``occurrences``.
     """
-    root = Path(root_path).resolve()
-    rel_files = _affected_files(store, old_name)
-    if not rel_files:
+    changes = _compute_rename(store, root_path, old_name, new_name)
+    if not changes:
         return {"files_modified": [], "occurrences": 0}
+
+    root = Path(root_path).resolve()
+
+    # Save undo snapshot
+    stack = get_undo_stack()
+    abs_paths = [abs_path for _, abs_path, _, _, _ in changes]
+    stack.save(f"rename {old_name} -> {new_name}", abs_paths)
 
     files_modified = []
     total = 0
-
-    for rel in rel_files:
-        abs_path = str(root / rel)
-        if not os.path.isfile(abs_path):
-            continue
-
-        parser = _ts_parser(abs_path)
-        if parser is None:
-            continue
-
-        source = Path(abs_path).read_bytes()
-        tree = parser.parse(source)
-        positions = _find_identifiers(tree.root_node, old_name)
-        if not positions:
-            continue
-
-        new_source = _replace_bytes(source, positions, new_name)
+    for rel, abs_path, _old, new_source, count in changes:
         Path(abs_path).write_bytes(new_source)
         files_modified.append(rel)
-        total += len(positions)
-
+        total += count
         if reindex:
             _reindex(abs_path, str(root), store)
 
@@ -219,6 +269,9 @@ def insert_code(
 
     Returns dict with ``file`` and ``line``.
     """
+    stack = get_undo_stack()
+    stack.save(f"insert code at {file_path}:{line}", [file_path])
+
     lines = _read_lines(file_path)
     if not code.endswith("\n"):
         code += "\n"
@@ -243,6 +296,9 @@ def replace_lines(
 
     Returns dict with ``file``, ``lines_removed``, ``lines_added``.
     """
+    stack = get_undo_stack()
+    stack.save(f"replace lines {start_line}-{end_line} in {file_path}", [file_path])
+
     lines = _read_lines(file_path)
     if not new_code.endswith("\n"):
         new_code += "\n"
@@ -277,7 +333,8 @@ def replace_entity(
     """
     ent = _find_entity(store, entity_name)
     if ent is None:
-        raise ValueError(f"Entity not found: {entity_name}")
+        from .queries import _suggest_on_miss
+        raise ValueError(_suggest_on_miss(store, entity_name))
 
     root = Path(root_path).resolve()
     abs_path = str(root / ent["file"])
@@ -288,6 +345,39 @@ def replace_entity(
         _reindex(abs_path, str(root), store)
 
     return result
+
+
+def undo_last(store: CodeStore | None = None, root_path: str | None = None) -> dict:
+    """Undo the most recent refactoring operation.
+
+    Restores all files to their pre-operation state. If store and root_path
+    are provided, re-indexes affected files.
+
+    Returns dict with ``label`` and ``files_restored``, or empty dict if
+    nothing to undo.
+    """
+    stack = get_undo_stack()
+    entry = stack.undo()
+    if entry is None:
+        return {}
+
+    result = {
+        "label": entry.label,
+        "files_restored": [s.file_path for s in entry.snapshots],
+    }
+
+    # Re-index restored files if store is available
+    if store and root_path:
+        root = Path(root_path).resolve()
+        for snap in entry.snapshots:
+            _reindex(snap.file_path, str(root), store)
+
+    return result
+
+
+def undo_history() -> list[dict]:
+    """List all entries in the undo stack."""
+    return get_undo_stack().history()
 
 
 def add_function(
@@ -316,7 +406,8 @@ def add_function(
     elif after_entity:
         ent = _find_entity(store, after_entity)
         if ent is None:
-            raise ValueError(f"Entity not found: {after_entity}")
+            from .queries import _suggest_on_miss
+            raise ValueError(_suggest_on_miss(store, after_entity))
         line = ent["end_line"]
     else:
         # Append at end

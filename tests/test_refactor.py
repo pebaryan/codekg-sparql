@@ -36,6 +36,21 @@ def test_rename_definition(tmp_path):
     assert "def parse_config" not in source
 
 
+def test_preview_rename(tmp_path):
+    """Preview shows diff without modifying files."""
+    store, root = _setup(tmp_path)
+    result = R.preview_rename(store, root, "parse_config", "load_config")
+    assert result["total_occurrences"] > 0
+    assert len(result["files"]) >= 1
+    assert "parse_config" in result["diff"]
+    assert "load_config" in result["diff"]
+
+    # Files should NOT be modified
+    config_py = os.path.join(root, "config.py")
+    source = open(config_py).read()
+    assert "def parse_config" in source  # still the old name
+
+
 def test_rename_caller(tmp_path):
     """Renaming a function updates call sites in other files."""
     store, root = _setup(tmp_path)

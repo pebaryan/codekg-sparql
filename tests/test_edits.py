@@ -122,10 +122,19 @@ def test_annotations_for():
 
 # --- Error handling ---
 
-def test_tag_unknown_entity():
+def test_tag_unknown_entity_with_suggestions():
     store = _indexed_store()
     with pytest.raises(ValueError, match="Entity not found"):
-        E.add_tag(store, "nonexistent_function_xyz", "test")
+        E.add_tag(store, "prase_config", "test")
+
+
+def test_tag_unknown_entity_suggestions_content():
+    store = _indexed_store()
+    try:
+        E.add_tag(store, "prase_config", "test")
+    except ValueError as e:
+        msg = str(e)
+        assert "Did you mean" in msg
 
 
 # --- Annotations survive re-indexing ---

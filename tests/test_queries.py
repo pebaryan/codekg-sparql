@@ -62,6 +62,86 @@ def test_all_functions():
     assert "create_app" in names
 
 
+def test_fuzzy_search_exact():
+    store = _indexed_store()
+    results = Q.fuzzy_search(store, "parse_config")
+    names = [r["name"] for r in results]
+    assert "parse_config" in names
+
+
+def test_fuzzy_search_typo():
+    store = _indexed_store()
+    results = Q.fuzzy_search(store, "prase_config")  # transposed letters
+    names = [r["name"] for r in results]
+    assert "parse_config" in names
+
+
+def test_fuzzy_search_partial():
+    store = _indexed_store()
+    results = Q.fuzzy_search(store, "config")
+    # Should find parse_config and validate_config as substring matches (boosted)
+    names = [r["name"] for r in results]
+    assert any("config" in n for n in names)
+    # Substring matches should be ranked first (score > 1.0 due to boost)
+    assert results[0]["score"] > 1.0
+
+
+def test_resolve_entity_by_name():
+    store = _indexed_store()
+    results = Q.resolve_entity(store, "parse_config")
+    assert len(results) >= 1
+    assert results[0]["name"] == "parse_config"
+    assert results[0]["file"]  # has a file path
+
+
+def test_resolve_entity_qualified():
+    store = _indexed_store()
+    results = Q.resolve_entity(store, "config.py:parse_config")
+    assert len(results) >= 1
+    assert "config.py" in results[0]["file"]
+
+
+def test_resolve_entity_disambiguates():
+    store = _indexed_store()
+    # create_app is only in app.py
+    all_results = Q.resolve_entity(store, "create_app")
+    qualified = Q.resolve_entity(store, "app.py:create_app")
+    assert len(qualified) == len(all_results)
+
+
+def test_list_files():
+    store = _indexed_store()
+    results = Q.list_files(store)
+    paths = [r["filePath"] for r in results]
+    assert any("config.py" in p for p in paths)
+    assert any("app.py" in p for p in paths)
+
+
+def test_entities_in_file():
+    store = _indexed_store()
+    results = Q.entities_in_file(store, "config.py")
+    names = [r["name"] for r in results]
+    assert "parse_config" in names
+    assert "validate_config" in names
+
+
+def test_read_source():
+    import os
+    fixture = os.path.join(os.path.dirname(__file__), "fixtures", "sample_project", "config.py")
+    source = Q.read_source(fixture, 1, 3)
+    lines = source.strip().split("\n")
+    assert len(lines) == 3
+    assert "1" in lines[0]  # line number present
+
+
+def test_suggest_on_miss():
+    store = _indexed_store()
+    msg = Q._suggest_on_miss(store, "prase_config")
+    assert "Entity not found" in msg
+    assert "Did you mean" in msg
+    assert "parse_config" in msg
+
+
 def test_context_around():
     store = _indexed_store()
     ctx = Q.context_around(store, "create_app")

@@ -7,6 +7,122 @@ PREFIX code: <https://codekg.dev/ontology#>
 PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 """
 
+_ENTITY_PREFIX = "https://codekg.dev/entity/"
+
+
+def _file_from_uri(uri: str) -> str:
+    uri = str(uri).strip("<>")
+    if uri.startswith(_ENTITY_PREFIX):
+        return uri[len(_ENTITY_PREFIX):].split("#")[0]
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Qualified name resolution: "file.py:func_name" or just "func_name"
+# ---------------------------------------------------------------------------
+
+def resolve_entity(store: CodeStore, name: str) -> list[dict]:
+    """Resolve an entity name, optionally qualified with ``file:name``.
+
+    Returns all matches with entity URI, name, type, file, and line info.
+    If *name* contains ``:``, the prefix is treated as a file path filter.
+    """
+    if ":" in name and not name.startswith("http"):
+        file_part, name_part = name.split(":", 1)
+        rows = store.query(PREFIX + """
+            SELECT ?entity ?ename ?type ?startLine ?endLine WHERE {
+                ?entity code:name ?ename .
+                FILTER(?ename = "%s")
+                ?entity rdf:type ?type .
+                ?entity code:startLine ?startLine .
+                OPTIONAL { ?entity code:endLine ?endLine }
+            }
+        """ % name_part.replace('"', '\\"'))
+        return [
+            {**r, "name": r["ename"], "file": _file_from_uri(r["entity"])}
+            for r in rows
+            if file_part in _file_from_uri(r["entity"])
+        ]
+    else:
+        rows = store.query(PREFIX + """
+            SELECT ?entity ?ename ?type ?startLine ?endLine WHERE {
+                ?entity code:name ?ename .
+                FILTER(?ename = "%s")
+                ?entity rdf:type ?type .
+                ?entity code:startLine ?startLine .
+                OPTIONAL { ?entity code:endLine ?endLine }
+            }
+        """ % name.replace('"', '\\"'))
+        return [{**r, "name": r["ename"], "file": _file_from_uri(r["entity"])} for r in rows]
+
+
+def _suggest_on_miss(store: CodeStore, name: str) -> str:
+    """Build an error message with fuzzy suggestions when an entity isn't found."""
+    suggestions = fuzzy_search(store, name.split(":")[-1], threshold=0.4, limit=5)
+    msg = f"Entity not found: '{name}'"
+    if suggestions:
+        names = [f"  {s['name']} ({s.get('file', _file_from_uri(s.get('entity', '')))})" for s in suggestions]
+        msg += "\nDid you mean:\n" + "\n".join(names)
+    return msg
+
+
+# ---------------------------------------------------------------------------
+# Index browsing
+# ---------------------------------------------------------------------------
+
+def list_files(store: CodeStore) -> list[dict]:
+    """List all indexed files."""
+    return store.query(PREFIX + """
+        SELECT ?filePath WHERE {
+            ?m rdf:type code:Module .
+            ?m code:filePath ?filePath .
+        }
+        ORDER BY ?filePath
+    """)
+
+
+def entities_in_file(store: CodeStore, file_path: str) -> list[dict]:
+    """List all entities defined in a file."""
+    return store.query(PREFIX + """
+        SELECT ?name ?type ?startLine ?endLine WHERE {
+            ?module rdf:type code:Module .
+            ?module code:filePath ?filePath .
+            FILTER(CONTAINS(?filePath, "%s"))
+            ?module code:defines ?entity .
+            ?entity code:name ?name .
+            ?entity rdf:type ?type .
+            ?entity code:startLine ?startLine .
+            OPTIONAL { ?entity code:endLine ?endLine }
+        }
+        ORDER BY ?startLine
+    """ % file_path.replace('"', '\\"'))
+
+
+# ---------------------------------------------------------------------------
+# Source reading
+# ---------------------------------------------------------------------------
+
+def read_source(file_path: str, start_line: int = 1, end_line: int | None = None) -> str:
+    """Read source code from a file, optionally a line range.
+
+    Args:
+        file_path: Path to the file.
+        start_line: First line (1-based, inclusive).
+        end_line: Last line (inclusive). None = to end of file.
+
+    Returns the source code as a string with line numbers.
+    """
+    from pathlib import Path
+    lines = Path(file_path).read_text(encoding="utf-8").splitlines()
+    if end_line is None:
+        end_line = len(lines)
+    start_line = max(1, start_line)
+    end_line = min(len(lines), end_line)
+    numbered = []
+    for i in range(start_line - 1, end_line):
+        numbered.append(f"{i + 1:4d} | {lines[i]}")
+    return "\n".join(numbered)
+
 
 def callers_of(store: CodeStore, function_name: str) -> list[dict]:
     """Find all functions/methods that call the given function name.
@@ -90,7 +206,7 @@ def functions_in(store: CodeStore, file_path: str) -> list[dict]:
     return store.query(sparql)
 
 
-def search_by_name(store: CodeStore, pattern: str) -> list[dict]:
+def search_by_name(store: CodeStore, pattern: str, limit: int = 50) -> list[dict]:
     """Search for entities by name (substring match)."""
     sparql = PREFIX + """
     SELECT ?entity ?name ?type WHERE {
@@ -99,8 +215,48 @@ def search_by_name(store: CodeStore, pattern: str) -> list[dict]:
         FILTER(CONTAINS(LCASE(?name), LCASE("%s")))
     }
     ORDER BY ?name
-    """ % pattern
+    LIMIT %d
+    """ % (pattern, limit)
     return store.query(sparql)
+
+
+def fuzzy_search(store: CodeStore, pattern: str, threshold: float = 0.5, limit: int = 20) -> list[dict]:
+    """Fuzzy search for entities by name.
+
+    Uses SequenceMatcher ratio for ranking.  Also boosts exact substring
+    matches so they always appear above pure-fuzzy hits.
+
+    Args:
+        pattern: Search string (typos OK).
+        threshold: Minimum similarity ratio (0.0–1.0).
+        limit: Maximum results to return.
+    """
+    from difflib import SequenceMatcher
+
+    all_entities = store.query(PREFIX + """
+        SELECT ?entity ?name ?type WHERE {
+            ?entity code:name ?name .
+            ?entity rdf:type ?type .
+        }
+    """)
+
+    pattern_lower = pattern.lower()
+    scored = []
+    for row in all_entities:
+        name = row.get("name", "")
+        name_lower = name.lower()
+
+        # Substring match gets a boost to always rank above fuzzy-only
+        if pattern_lower in name_lower:
+            score = 1.0 + SequenceMatcher(None, pattern_lower, name_lower).ratio()
+        else:
+            score = SequenceMatcher(None, pattern_lower, name_lower).ratio()
+
+        if score >= threshold:
+            scored.append({**row, "score": round(score, 3)})
+
+    scored.sort(key=lambda r: r["score"], reverse=True)
+    return scored[:limit]
 
 
 def impact_of(store: CodeStore, function_name: str) -> list[dict]:

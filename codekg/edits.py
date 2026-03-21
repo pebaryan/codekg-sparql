@@ -29,10 +29,11 @@ def _resolve_entity(store: CodeStore, name: str) -> str | None:
 
 
 def _require_entity(store: CodeStore, name: str) -> str:
-    """Resolve entity by name or raise ValueError."""
+    """Resolve entity by name or raise ValueError with suggestions."""
     uri = _resolve_entity(store, name)
     if uri is None:
-        raise ValueError(f"Entity not found: {name}")
+        from .queries import _suggest_on_miss
+        raise ValueError(_suggest_on_miss(store, name))
     return uri
 
 

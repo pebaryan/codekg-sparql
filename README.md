@@ -43,6 +43,7 @@ Tree-sitter grammars extract functions, classes, methods, imports, calls, variab
 
 - **Raw SPARQL** — full SPARQL 1.1 against the embedded store
 - **Pre-built queries** — `callers_of`, `callees_of`, `impact_of` (transitive), `context_around`, `search_by_name`, `class_hierarchy`, `all_functions`, `all_classes`
+- **Fuzzy search** — typo-tolerant entity search using `SequenceMatcher` with substring boosting
 - **NL→SPARQL** — ask natural language questions, translated to SPARQL via a local LLM (OpenAI-compatible API)
 - **Interactive REPL** — SPARQL REPL with auto-prefixes
 
@@ -59,11 +60,49 @@ User annotations stored in a dedicated named graph that survives re-indexing:
 Edit operations that modify actual source files, using tree-sitter for byte-accurate precision:
 
 - **`rename_symbol`** — cross-file rename using AST identifier matching (won't touch substrings or string literals)
+- **`preview_rename`** — dry-run showing unified diff before applying
 - **`replace_entity`** — replace a function/class body by name (KG lookup for file + line range)
 - **`add_function`** — insert code after a named entity, at a line, or at end of file
 - **`insert_code`** — insert code before/after any line
 
 All operations auto re-index affected files so the KG stays in sync.
+
+### Undo
+
+Every refactoring operation (rename, replace, insert) snapshots affected files before modifying them. The undo stack supports:
+
+- **`undo_last`** — restore all files from the most recent operation and re-index
+- **`undo_history`** — view the stack of undoable operations
+- **Disk persistence** — optional backup directory for cross-session undo
+
+### Code Analysis
+
+Static analysis powered by SPARQL queries over the knowledge graph:
+
+- **Dead code detection** — find functions/methods with no callers (filters entry points, dunders, test methods)
+- **Unused imports** — find imports never referenced in calls or entity names
+- **Function metrics** — size (lines), fan-in (callers), fan-out (callees) per function
+- **Class metrics** — size, method count per class
+- **Refactoring candidates** — functions that are large or heavily called
+- **Circular dependencies** — detect A↔B import cycles between modules
+
+### Git Impact Analysis
+
+Map git changes to affected code entities:
+
+- Parse unified diffs to extract changed files and line ranges
+- Map changed lines to KG entities via `startLine`/`endLine` overlap
+- Compute transitive impact — find all callers of changed functions
+- Supports uncommitted changes, specific commits, and branch comparisons
+
+### Graph Export
+
+Export knowledge graph visualizations:
+
+- **Call graph** — full graph or BFS from a root function with configurable depth
+- **Inheritance graph** — class hierarchy with orphan classes
+- **File dependency graph** — file-level import relationships
+- **Formats** — Mermaid flowchart or DOT/Graphviz
 
 ### File Watcher
 
@@ -73,7 +112,19 @@ All operations auto re-index affected files so the KG stays in sync.
 
 [Model Context Protocol](https://modelcontextprotocol.io/) server exposing all capabilities as tools:
 
-`index_codebase`, `callers_of`, `callees_of`, `impact_of`, `context_around`, `search`, `sparql_query`, `ask_question`, `stats`, `add_tag`, `remove_tag`, `add_note`, `remove_note`, `add_link`, `remove_link`, `annotations`, `rename_symbol`, `replace_entity`, `add_function_to_file`, `insert_code_at_line`
+**Index & Browse:** `index_codebase`, `list_files`, `entities_in_file`, `resolve_entity`, `read_source`, `stats`
+
+**Query:** `callers_of`, `callees_of`, `impact_of`, `context_around`, `search`, `fuzzy_search`, `sparql_query`, `ask_question`
+
+**Annotate:** `add_tag`, `remove_tag`, `add_note`, `remove_note`, `add_link`, `remove_link`, `annotations`
+
+**Refactor:** `preview_rename`, `rename_symbol`, `replace_entity`, `add_function_to_file`, `insert_code_at_line`, `undo_last`, `undo_history`
+
+**Analyze:** `dead_code`, `unused_imports`, `function_metrics`, `class_metrics`, `refactoring_candidates`, `circular_dependencies`
+
+**Git:** `git_impact`
+
+**Export:** `export_call_graph`, `export_inheritance_graph`, `export_dependency_graph`
 
 Supports **stdio** (for Claude Desktop, Cursor, etc.) and **SSE** transports.
 
@@ -98,6 +149,7 @@ pyoxigraph, rdflib, click, openai, watchdog, mcp
 
 ```bash
 python -m codekg index ./my-project
+python -m codekg index ./my-project --no-resolve   # skip call resolution
 ```
 
 This parses all supported files, generates RDF triples, and loads them into the Oxigraph store (persisted in `.codekg_store/`).
@@ -111,6 +163,7 @@ python -m codekg callees-of create_app
 python -m codekg impact-of parse_config     # transitive callers
 python -m codekg context parse_config        # callers + callees + container
 python -m codekg search "config"
+python -m codekg fuzzy "prase_confg"         # typo-tolerant search
 
 # Raw SPARQL
 python -m codekg query "PREFIX code: <https://codekg.dev/ontology#> SELECT ?f ?name WHERE { ?f a code:Function ; code:name ?name } LIMIT 10"
@@ -139,6 +192,50 @@ python -m codekg rename parse_config load_config ./my-project
 python -m codekg replace-entity parse_config "def parse_config(path):\n    return {}" ./my-project
 python -m codekg add-function config.py "def helper():\n    pass" ./my-project --after parse_config
 python -m codekg insert-code ./my-project/config.py 1 "# Copyright 2026" --before
+
+# Undo the last refactoring
+python -m codekg undo --directory ./my-project
+python -m codekg undo-history
+```
+
+### Analyze
+
+```bash
+python -m codekg dead-code
+python -m codekg unused-imports
+python -m codekg metrics --type functions --limit 20
+python -m codekg metrics --type classes
+python -m codekg refactoring-candidates --min-size 30 --min-fan-in 3
+python -m codekg circular-deps
+```
+
+### Git Impact Analysis
+
+```bash
+# Impact of uncommitted changes
+python -m codekg git-impact ./my-project
+
+# Impact of a specific commit
+python -m codekg git-impact ./my-project --ref abc123
+
+# Impact of changes between branches
+python -m codekg git-impact ./my-project --ref feature-branch --base main
+```
+
+### Export Graphs
+
+```bash
+# Mermaid (default)
+python -m codekg export calls
+python -m codekg export calls --root create_app --depth 3
+python -m codekg export inheritance
+python -m codekg export dependencies
+
+# DOT/Graphviz
+python -m codekg export calls --fmt dot -o call_graph.dot
+
+# Render with Graphviz
+python -m codekg export inheritance --fmt dot -o inheritance.dot && dot -Tpng inheritance.dot -o inheritance.png
 ```
 
 ### Watch for changes
@@ -168,14 +265,18 @@ codekg/
 ├── parser_web.py      # HTML/CSS parser
 ├── parser_config.py   # JSON/YAML/TOML parser
 ├── ontology.py        # RDF namespace definitions, URI helpers
-├── triples.py         # ModuleInfo → RDF quads
+├── triples.py         # ModuleInfo -> RDF quads
 ├── store.py           # Oxigraph wrapper (query, update, clear)
 ├── indexer.py         # Directory walker + parser dispatch
 ├── resolver.py        # Post-index call resolution
 ├── queries.py         # Pre-built SPARQL query templates
-├── nl2sparql.py       # NL→SPARQL via local LLM
+├── nl2sparql.py       # NL->SPARQL via local LLM
 ├── edits.py           # Graph annotations (tags, notes, links)
 ├── refactor.py        # Source-level refactoring (rename, replace, insert)
+├── undo.py            # Undo stack for refactoring operations
+├── analysis.py        # Dead code, metrics, circular deps
+├── git_impact.py      # Git diff -> impact analysis
+├── export.py          # Mermaid/DOT graph export
 ├── watcher.py         # File watcher with debouncing
 ├── mcp_server.py      # MCP server (stdio + SSE)
 └── cli.py             # Click CLI
@@ -186,10 +287,12 @@ ontology/
 ### Data Flow
 
 ```
-Source Files → Tree-sitter Parser → ModuleInfo (dataclasses)
-    → RDF Quads → Oxigraph (named graph per file)
-    → SPARQL Queries / NL→SPARQL / MCP Tools
-    → Refactoring → File Edits → Re-index
+Source Files -> Tree-sitter Parser -> ModuleInfo (dataclasses)
+    -> RDF Quads -> Oxigraph (named graph per file)
+    -> SPARQL Queries / NL->SPARQL / MCP Tools
+    -> Analysis (dead code, metrics, impact)
+    -> Refactoring -> File Edits -> Re-index (with undo)
+    -> Export (Mermaid / DOT)
 ```
 
 ### Key Design Decisions
@@ -198,6 +301,7 @@ Source Files → Tree-sitter Parser → ModuleInfo (dataclasses)
 - **Two-tier call edges** — `code:calls` stores callee names as string literals at parse time; `code:resolvedCalls` links to actual entity URIs after a post-index resolution pass. Both are queryable.
 - **Shared dataclasses** — all language parsers output the same `ModuleInfo`/`FunctionInfo`/`ClassInfo` dataclasses, so `triples.py` works unchanged for any language
 - **Annotations survive re-indexing** — user tags/notes/links live in a dedicated `_annotations#graph`, separate from per-file graphs
+- **Undo snapshots** — refactoring operations snapshot files before modifying, enabling safe rollback
 
 ## Tests
 
@@ -205,4 +309,4 @@ Source Files → Tree-sitter Parser → ModuleInfo (dataclasses)
 pytest tests/ -v
 ```
 
-107 tests across 11 test files covering all parsers, the store, triple generation, queries, call resolution, annotations, and refactoring.
+149 tests across 15 test files covering all parsers, the store, triple generation, queries, call resolution, annotations, refactoring, undo, analysis, export, and git impact.
