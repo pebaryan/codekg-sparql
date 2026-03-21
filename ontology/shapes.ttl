@@ -1,0 +1,120 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix code: <https://codekg.dev/ontology#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# ---------------------------------------------------------------------------
+# Use case 1 — Parser output validation: required properties on each class
+# ---------------------------------------------------------------------------
+
+code:ModuleShape a sh:NodeShape ;
+    sh:targetClass code:Module ;
+    sh:property [
+        sh:path     code:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message  "Module must have a code:name (xsd:string)." ;
+    ] ;
+    sh:property [
+        sh:path     code:filePath ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message  "Module must have a code:filePath (xsd:string)." ;
+    ] .
+
+# Targets code:Function directly; with RDFS inference enabled in the validator
+# code:Method instances are also entailed to be code:Function (via subClassOf),
+# so this shape covers both without duplication.
+code:FunctionShape a sh:NodeShape ;
+    sh:targetClass code:Function ;
+    sh:property [
+        sh:path     code:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message  "Function/Method must have a code:name (xsd:string)." ;
+    ] ;
+    sh:property [
+        sh:path     code:startLine ;
+        sh:minCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:message  "Function/Method must have a code:startLine (xsd:integer)." ;
+    ] ;
+    sh:property [
+        sh:path     code:endLine ;
+        sh:minCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:message  "Function/Method must have a code:endLine (xsd:integer)." ;
+    ] .
+
+code:ClassShape a sh:NodeShape ;
+    sh:targetClass code:Class ;
+    sh:property [
+        sh:path     code:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message  "Class must have a code:name (xsd:string)." ;
+    ] ;
+    sh:property [
+        sh:path     code:startLine ;
+        sh:minCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:message  "Class must have a code:startLine (xsd:integer)." ;
+    ] ;
+    sh:property [
+        sh:path     code:endLine ;
+        sh:minCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:message  "Class must have a code:endLine (xsd:integer)." ;
+    ] .
+
+code:ParameterShape a sh:NodeShape ;
+    sh:targetClass code:Parameter ;
+    sh:property [
+        sh:path     code:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message  "Parameter must have a code:name (xsd:string)." ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# Use case 2 — Domain/range enforcement (OWL declares these but pyoxigraph
+#               does not enforce them without a reasoner)
+# ---------------------------------------------------------------------------
+
+# code:filePath rdfs:domain code:Module — only Module nodes may carry filePath
+code:FilePathDomainShape a sh:NodeShape ;
+    sh:targetSubjectsOf code:filePath ;
+    sh:class   code:Module ;
+    sh:message "Only a code:Module entity may have code:filePath." .
+
+# code:inheritsFrom rdfs:domain code:Class — only Class nodes may use it
+code:InheritsFromDomainShape a sh:NodeShape ;
+    sh:targetSubjectsOf code:inheritsFrom ;
+    sh:class   code:Class ;
+    sh:message "Only a code:Class entity may use code:inheritsFrom." .
+
+# code:hasParameter rdfs:domain code:Function — only Function/Method nodes
+code:HasParameterDomainShape a sh:NodeShape ;
+    sh:targetSubjectsOf code:hasParameter ;
+    sh:class   code:Function ;
+    sh:message "Only a code:Function (or subclass) entity may use code:hasParameter." .
+
+# code:hasParameter rdfs:range code:Parameter
+code:HasParameterRangeShape a sh:NodeShape ;
+    sh:targetObjectsOf code:hasParameter ;
+    sh:class   code:Parameter ;
+    sh:message "The object of code:hasParameter must be a code:Parameter." .
+
+# ---------------------------------------------------------------------------
+# Use case 3 — Catch dangling resolvedCalls (must be IRI → code:Function,
+#               never a plain literal like code:calls stores)
+# ---------------------------------------------------------------------------
+
+code:ResolvedCallsShape a sh:NodeShape ;
+    sh:targetSubjectsOf code:resolvedCalls ;
+    sh:property [
+        sh:path      code:resolvedCalls ;
+        sh:nodeKind  sh:IRI ;
+        sh:class     code:Function ;
+        sh:message   "code:resolvedCalls must link to an IRI of type code:Function (or subclass). Use code:calls for unresolved literal names." ;
+    ] .
