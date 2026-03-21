@@ -1,0 +1,117 @@
+@prefix code: <https://codekg.dev/ontology#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# --- Ontology metadata ---
+code: a owl:Ontology ;
+    rdfs:label "CodeKG Code Ontology" ;
+    rdfs:comment "Lightweight ontology for representing code structure as RDF." .
+
+# --- Classes ---
+code:Module a owl:Class ;
+    rdfs:label "Module" ;
+    rdfs:comment "A source file / module." .
+
+code:Class a owl:Class ;
+    rdfs:label "Class" ;
+    rdfs:comment "A class definition." .
+
+code:Function a owl:Class ;
+    rdfs:label "Function" ;
+    rdfs:comment "A top-level function definition." .
+
+code:Method a owl:Class ;
+    rdfs:label "Method" ;
+    rdfs:comment "A method within a class." ;
+    rdfs:subClassOf code:Function .
+
+code:Parameter a owl:Class ;
+    rdfs:label "Parameter" ;
+    rdfs:comment "A function or method parameter." .
+
+code:Import a owl:Class ;
+    rdfs:label "Import" ;
+    rdfs:comment "An import statement." .
+
+code:Variable a owl:Class ;
+    rdfs:label "Variable" ;
+    rdfs:comment "A module-level variable assignment." .
+
+# --- Data properties ---
+code:name a owl:DatatypeProperty ;
+    rdfs:label "name" ;
+    rdfs:range xsd:string .
+
+code:filePath a owl:DatatypeProperty ;
+    rdfs:label "filePath" ;
+    rdfs:domain code:Module ;
+    rdfs:range xsd:string .
+
+code:startLine a owl:DatatypeProperty ;
+    rdfs:label "startLine" ;
+    rdfs:range xsd:integer .
+
+code:endLine a owl:DatatypeProperty ;
+    rdfs:label "endLine" ;
+    rdfs:range xsd:integer .
+
+code:docstring a owl:DatatypeProperty ;
+    rdfs:label "docstring" ;
+    rdfs:range xsd:string .
+
+code:hasDecorator a owl:DatatypeProperty ;
+    rdfs:label "hasDecorator" ;
+    rdfs:range xsd:string .
+
+# --- Object properties ---
+code:defines a owl:ObjectProperty ;
+    rdfs:label "defines" ;
+    rdfs:comment "A module or class defines a function, class, or method." .
+
+code:calls a owl:ObjectProperty ;
+    rdfs:label "calls" ;
+    rdfs:comment "A function/method calls another (stored as callee name literal)." .
+
+code:resolvedCalls a owl:ObjectProperty ;
+    rdfs:label "resolvedCalls" ;
+    rdfs:comment "Resolved call link from caller to callee entity URI (post-index)." ;
+    rdfs:domain code:Function ;
+    rdfs:range code:Function .
+
+code:inheritsFrom a owl:ObjectProperty ;
+    rdfs:label "inheritsFrom" ;
+    rdfs:domain code:Class ;
+    rdfs:range code:Class .
+
+code:imports a owl:DatatypeProperty ;
+    rdfs:label "imports" ;
+    rdfs:comment "Module imports a name." ;
+    rdfs:domain code:Module ;
+    rdfs:range xsd:string .
+
+code:hasParameter a owl:ObjectProperty ;
+    rdfs:label "hasParameter" ;
+    rdfs:domain code:Function ;
+    rdfs:range code:Parameter .
+
+# --- User annotation properties ---
+code:tag a owl:DatatypeProperty ;
+    rdfs:label "tag" ;
+    rdfs:comment "User-assigned tag on any code entity (e.g. 'entry-point', 'deprecated')." ;
+    rdfs:range xsd:string .
+
+code:note a owl:DatatypeProperty ;
+    rdfs:label "note" ;
+    rdfs:comment "Free-text user note attached to a code entity." ;
+    rdfs:range xsd:string .
+
+code:linksTo a owl:ObjectProperty ;
+    rdfs:label "linksTo" ;
+    rdfs:comment "User-defined directed link between two code entities." .
+
+code:linkLabel a owl:DatatypeProperty ;
+    rdfs:label "linkLabel" ;
+    rdfs:comment "Label on a user-defined link (stored on a reified statement or via property)." ;
+    rdfs:range xsd:string .
