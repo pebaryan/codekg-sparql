@@ -96,7 +96,10 @@ code:InheritsFromDomainShape a sh:NodeShape ;
 # code:hasParameter rdfs:domain code:Function — only Function/Method nodes
 code:HasParameterDomainShape a sh:NodeShape ;
     sh:targetSubjectsOf code:hasParameter ;
-    sh:class   code:Function ;
+    sh:or (
+        [ sh:class code:Function ]
+        [ sh:class code:Method ]
+    ) ;
     sh:message "Only a code:Function (or subclass) entity may use code:hasParameter." .
 
 # code:hasParameter rdfs:range code:Parameter
@@ -104,6 +107,32 @@ code:HasParameterRangeShape a sh:NodeShape ;
     sh:targetObjectsOf code:hasParameter ;
     sh:class   code:Parameter ;
     sh:message "The object of code:hasParameter must be a code:Parameter." .
+
+# ---------------------------------------------------------------------------
+# MethodShape — mirrors FunctionShape for code:Method (subClassOf code:Function)
+# Without RDFS inference, Methods need their own shape to enforce the same
+# required properties (name, startLine, endLine) as Functions.
+# ---------------------------------------------------------------------------
+code:MethodShape a sh:NodeShape ;
+    sh:targetClass code:Method ;
+    sh:property [
+        sh:path     code:name ;
+        sh:minCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message  "Method must have a code:name (xsd:string)." ;
+    ] ;
+    sh:property [
+        sh:path     code:startLine ;
+        sh:minCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:message  "Method must have a code:startLine (xsd:integer)." ;
+    ] ;
+    sh:property [
+        sh:path     code:endLine ;
+        sh:minCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:message  "Method must have a code:endLine (xsd:integer)." ;
+    ] .
 
 # ---------------------------------------------------------------------------
 # Use case 3 — Catch dangling resolvedCalls (must be IRI → code:Function,

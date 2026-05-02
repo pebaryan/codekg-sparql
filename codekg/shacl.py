@@ -13,28 +13,34 @@ ONTOLOGY_PATH = Path(__file__).parent.parent / "ontology" / "code.ttl"
 
 
 def _store_to_rdflib(code_store: "CodeStore"):
-    """Convert a CodeStore's quads to an rdflib ConjunctiveGraph for pyshacl."""
+    """Convert a CodeStore's quads to an rdflib Graph for pyshacl."""
     import pyoxigraph as ox
-    from rdflib import URIRef, Literal, BNode, ConjunctiveGraph
+    from rdflib import URIRef, Literal, BNode, Graph
 
     def _term(t):
         if isinstance(t, ox.NamedNode):
-            return URIRef(str(t))
+            # pyoxigraph str() wraps with <>, strip them for rdflib
+            uri = str(t)
+            if uri.startswith("<") and uri.endswith(">"):
+                uri = uri[1:-1]
+            return URIRef(uri)
         if isinstance(t, ox.Literal):
             if t.datatype:
-                return Literal(t.value, datatype=URIRef(str(t.datatype)))
+                dt = str(t.datatype)
+                if dt.startswith("<") and dt.endswith(">"):
+                    dt = dt[1:-1]
+                return Literal(t.value, datatype=URIRef(dt))
             if t.language:
                 return Literal(t.value, lang=t.language)
             return Literal(t.value)
         return BNode(str(t))  # BlankNode
 
-    g = ConjunctiveGraph()
+    g = Graph()
     for quad in code_store._store.quads_for_pattern(None, None, None, None):
         s = _term(quad.subject)
-        p = URIRef(str(quad.predicate))
+        p = URIRef(str(quad.predicate).strip("<>"))
         o = _term(quad.object)
-        ctx = URIRef(str(quad.graph_name)) if isinstance(quad.graph_name, ox.NamedNode) else None
-        g.add((s, p, o, ctx))
+        g.add((s, p, o))
 
     return g
 
@@ -65,9 +71,7 @@ def validate(code_store: "CodeStore", raise_on_violation: bool = False) -> tuple
     conforms, _, results_text = _shacl_validate(
         data_graph,
         shacl_graph=str(SHAPES_PATH),
-        ont_graph=str(ONTOLOGY_PATH),
-        ont_graph_format="turtle",
-        inference="rdfs",
+        inference="none",
         serialize_report_graph=False,
     )
 

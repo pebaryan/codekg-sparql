@@ -62,12 +62,20 @@ def write_inferred_to_store(code_store: "CodeStore") -> int:
         Number of new triples written.
     """
     import pyoxigraph as ox
-    from rdflib import URIRef, Literal
+    from rdflib import URIRef, Literal, BNode
 
     def _to_ox(term):
         if isinstance(term, URIRef):
-            return ox.NamedNode(str(term))
+            # owlrl may emit triples with invalid IRI characters (<, >)
+            # used for internal syntax; skip them silently.
+            s = str(term)
+            if "<" in s or ">" in s:
+                return None
+            return ox.NamedNode(s)
         if isinstance(term, Literal):
+            # owlrl sometimes creates Literal subjects; these aren't valid
+            # for pyoxigraph (subject must be NamedNode or BlankNode).
+            # Skip them by returning None.
             if term.datatype:
                 return ox.Literal(str(term), datatype=ox.NamedNode(str(term.datatype)))
             if term.language:
@@ -91,7 +99,12 @@ def write_inferred_to_store(code_store: "CodeStore") -> int:
         (_to_ox(s), _to_ox(p), _to_ox(o), inferred_graph)
         for s, p, o in reasoned
         if (str(s), str(p), str(o)) not in existing
+        and not isinstance(s, Literal)  # pyoxigraph subjects must be IRI/BNode
     ]
+
+    # Filter out triples where any component was skipped (invalid IRI)
+    # or where the subject is a Literal (not valid for pyoxigraph)
+    quads = [q for q in quads if all(c is not None for c in q[:3])]
 
     code_store.load_triples(quads)
     return len(quads)
